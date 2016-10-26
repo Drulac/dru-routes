@@ -6,27 +6,50 @@ module.exports = function(app){
 	let url = require('url');
 	let contentType = require('content-type');
 	let mime = require('mime');
+	let fs = require("fs");
 
 	let routes = [];
+	let statics = [];
+	let on = [];
 
 	function isNumeric(n) {
 		return !isNaN(parseFloat(n)) && isFinite(n);
 	}
 
-	let response = function(req, res) {
+	fs.tryFile = function(path){
+		try {
+			stats = fs.lstatSync(path);
 
-		let headerContentType = null;
-
-		try{
-			headerContentType = contentType.parse(req);
+			if(stats.isFile())
+			{
+				return true;
+			}else{
+				return false;
+			}
 		}catch(e){
-			headerContentType = {"Content-Type": "text/plain"};
+			return false;
 		}
+	};
 
-		res.writeHead(200, headerContentType);
+	fs.tryDirectory = function(path){
+		try {
+			let stats = fs.lstatSync(path);
+
+			if(stats.isDirectory())
+			{
+				return true;
+			}else{
+				return false;
+			};
+		}catch(e){
+			return false;
+		}
+	};
+
+	let response = function(req, res) {
+		let timeStart = Date.now();
 
 		var page = url.parse(req.url).pathname;
-		console.log(page);
 
 		for(let route of routes)
 		{
@@ -48,13 +71,62 @@ module.exports = function(app){
 					}
 				}
 
-				route.method(objArgs, req).then(function(retour){
+				req.args = objArgs;
+
+				route.method(req, res, function(retour){
+
+					let headerContentType = null;
+
+					try{
+						headerContentType = contentType.parse(req);
+					}catch(e){
+						headerContentType = {"Content-Type": "text/plain"};
+					}
+
+					res.writeHead(200, headerContentType);
 					res.write(retour);
 					res.end();
+
+					console.log((Date.now() - timeStart)+"ms - "+page);
+
+					return;
 				});
-				break;
 			}
 		}
+
+		for(let dir of statics)
+		{
+			let filepath = require('path').dirname(require.main.filename)+"/"+dir + page;
+			console.log(filepath);
+			if(fs.tryFile(filepath))
+			{
+
+				let headerContentType = null;
+
+				try{
+					headerContentType = {"Content-Type": mime.lookup(filepath)};
+				}catch(e){
+					headerContentType = {"Content-Type": "text/plain"};
+				}
+
+				res.writeHead(200, headerContentType);
+
+				var fileStream = fs.createReadStream(filepath);
+				fileStream.on('data', function (data) {
+					res.write(data);
+				});
+				fileStream.on('end', function() {
+					res.end();
+					console.log((Date.now() - timeStart)+"ms - "+page);
+				});
+				
+				return;
+			}
+		}
+
+		res.writeHead(404, {"Content-Type": "text/plain"});
+		res.write("file not found");
+		res.end();
 	};
 
 	self.get = function(path, method){
@@ -88,10 +160,13 @@ module.exports = function(app){
 		}
 
 		regex = regex + "$";
-
-		console.log({path: new RegExp(regex), method: method, args: args});
-
 		routes.push({path: new RegExp(regex), method: method, args: args})
+	};
+
+	self.static = function(path){
+		if(path[path.length-1] == "/")
+			delete path[path.length-1];
+		statics.push(path);
 	};
 	
 	var server = http.createServer(response);
@@ -102,6 +177,7 @@ module.exports = function(app){
 
 	app.get = self.get;
 	app.listen = self.listen;
+	app.static = self.static;
 
 	return self;
 };
